@@ -49,6 +49,8 @@ else ()
 endif ()
 
 add_library (MemoryModule STATIC MemoryModule.c MemoryModule.h)
+set_property(TARGET MemoryModule PROPERTY
+  MSVC_RUNTIME_LIBRARY "MultiThreaded")
 target_include_directories(MemoryModule PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}")
 if (NOT MSVC)
     set_target_properties ("MemoryModule" PROPERTIES PREFIX "")
