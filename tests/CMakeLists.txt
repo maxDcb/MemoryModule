@@ -1,14 +1,18 @@
-set (sources_testsuite
-  TestSuite.c
-)
+cmake_minimum_required(VERSION 3.20)
+project(MemoryDllDemo LANGUAGES C CXX)
 
-if (NOT MSVC)
-    set (CMAKE_SHARED_LIBRARY_LINK_C_FLAGS "-static")
-    set (CMAKE_SHARED_LIBRARY_LINK_CXX_FLAGS "-static")
-endif ()
+set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_WINDOWS_EXPORT_ALL_SYMBOLS ON)
 
-add_executable (TestSuite ${sources_testsuite})
-target_link_libraries ("TestSuite" "MemoryModule")
-if (NOT MSVC)
-    set_target_properties ("TestSuite" PROPERTIES SUFFIX ".exe")
-endif ()
+# --- DLL ---
+add_library(TestDll SHARED TestDll.cpp)
+
+# --- Loader executable ---
+add_executable(TestLoader test.cpp)
+target_link_libraries(TestLoader PRIVATE MemoryModule)
+
+# Put DLL next to exe after build
+add_custom_command(TARGET TestLoader POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            $<TARGET_FILE:TestDll>
+            $<TARGET_FILE_DIR:TestLoader>)
