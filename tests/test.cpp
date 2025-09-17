@@ -21,19 +21,18 @@ int main()
         return 1;
     }
 
-    HMEMORYMODULE mod = MemoryLoadLibrary(buffer.data(), buffer.size());
-    if (!mod) 
+    MemoryModule module = MemoryModule::load(buffer.data(), buffer.size());
+    if (!module)
     {
         std::cerr << "MemoryLoadLibrary failed\n";
         return 1;
     }
 
-    HelloFunc hello = (HelloFunc)MemoryGetProcAddress(mod, "HelloFromDll");
+    HelloFunc hello = reinterpret_cast<HelloFunc>(module.getProcAddress("HelloFromDll"));
     if (hello)
         hello();
     else
         std::cerr << "Could not find HelloFromDll\n";
 
-    MemoryFreeLibrary(mod);
     return 0;
 }
