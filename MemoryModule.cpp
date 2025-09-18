@@ -85,8 +85,8 @@ typedef struct
     BOOL initialized;
     BOOL isDLL;
     BOOL isRelocated;
-    CustomAllocFunc alloc;
-    CustomFreeFunc free;
+    CustomAllocFunc allocMemory;
+    CustomFreeFunc freeMemory;
     CustomLoadLibraryFunc loadLibrary;
     CustomGetProcAddressFunc getProcAddress;
     CustomFreeLibraryFunc freeLibrary;
@@ -169,7 +169,7 @@ static void FreePointerList(POINTER_LIST *head, CustomFreeFunc freeMemory, void 
         POINTER_LIST *next;
         freeMemory(node->address, 0, MEM_RELEASE, userdata);
         next = node->next;
-        free(node);
+        freeMemory(node, 0, MEM_RELEASE, userdata);
         node = next;
     }
 }
@@ -189,6 +189,33 @@ static BOOL CheckSize(size_t size, size_t expected)
 }
 
 
+//
+// Cmdline handling
+//
+
+
+void SimpleWideToAnsi(const wchar_t* wide, char* ansi, const int maxLen) 
+{
+    int i;
+    for (i = 0; i < maxLen - 1 && wide[i] != L'\0'; i++) 
+    {
+        // Assumes ASCII-only characters
+        ansi[i] = (char)(wide[i] & 0xFF);
+    }
+    ansi[i] = '\0';  // Null-terminate the ANSI string
+}
+
+
+void SimpleAnsiToWide(const char* ansi, wchar_t* wide) 
+{
+    while (*ansi) 
+    {
+        *wide++ = (wchar_t)(unsigned char)(*ansi++);
+    }
+    *wide = 0; // null-terminate
+}
+
+
 static BOOL CopySections(const unsigned char *data, size_t size, PIMAGE_NT_HEADERS old_headers, PMEMORYMODULE module)
 {
     int i, section_size;
@@ -204,7 +231,7 @@ static BOOL CopySections(const unsigned char *data, size_t size, PIMAGE_NT_HEADE
             section_size = old_headers->OptionalHeader.SectionAlignment;
             if (section_size > 0) 
             {
-                dest = (unsigned char *)module->alloc(codeBase + section->VirtualAddress,
+                dest = (unsigned char *)module->allocMemory(codeBase + section->VirtualAddress,
                     section_size,
                     MEM_COMMIT,
                     PAGE_READWRITE,
@@ -233,7 +260,7 @@ static BOOL CopySections(const unsigned char *data, size_t size, PIMAGE_NT_HEADE
         }
 
         // commit memory block and copy data from dll
-        dest = (unsigned char *)module->alloc(codeBase + section->VirtualAddress,
+        dest = (unsigned char *)module->allocMemory(codeBase + section->VirtualAddress,
                             section->SizeOfRawData,
                             MEM_COMMIT,
                             PAGE_READWRITE,
@@ -325,7 +352,7 @@ static BOOL FinalizeSection(PMEMORYMODULE module, PSECTIONFINALIZEDATA sectionDa
            ) 
         {
             // Only allowed to decommit whole pages
-            module->free(sectionData->address, sectionData->size, MEM_DECOMMIT, module->userdata);
+            module->freeMemory(sectionData->address, sectionData->size, MEM_DECOMMIT, module->userdata);
         }
         return TRUE;
     }
@@ -509,7 +536,7 @@ static BOOL BuildImportTable(PMEMORYMODULE module)
     }
 
     importDesc = (PIMAGE_IMPORT_DESCRIPTOR) (codeBase + directory->VirtualAddress);
-    for (; !IsBadReadPtr(importDesc, sizeof(IMAGE_IMPORT_DESCRIPTOR)) && importDesc->Name; importDesc++) 
+    for (; importDesc->Name; importDesc++)
     {
         uintptr_t *thunkRef;
         FARPROC *funcRef;
@@ -522,7 +549,24 @@ static BOOL BuildImportTable(PMEMORYMODULE module)
             break;
         }
 
-        tmp = (HCUSTOMMODULE *) realloc(module->modules, (module->numModules+1)*(sizeof(HCUSTOMMODULE)));
+        SIZE_T newCount = module->numModules + 1;
+        SIZE_T newSize = newCount * sizeof(HCUSTOMMODULE);
+
+        if (module->modules == NULL) 
+        {
+            tmp = (HCUSTOMMODULE *) module->allocMemory(NULL, newSize, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE, module->userdata);
+        } 
+        else 
+        {
+            tmp = (HCUSTOMMODULE *) module->allocMemory(NULL, newSize, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE, module->userdata);
+            if (tmp != NULL) 
+            {
+                SIZE_T oldSize = module->numModules * sizeof(HCUSTOMMODULE);
+                memcpy(tmp, module->modules, oldSize);
+                module->freeMemory(module->modules, 0, MEM_RELEASE, module->userdata);
+            }
+        }
+
         if (tmp == NULL) 
         {
             module->freeLibrary(handle, module->userdata);
@@ -741,7 +785,15 @@ HMEMORYMODULE MemoryLoadLibraryEx(const void *data, size_t size,
     // Memory block may not span 4 GB boundaries.
     while ((((uintptr_t) code) >> 32) < (((uintptr_t) (code + alignedImageSize)) >> 32)) 
     {
-        POINTER_LIST *node = (POINTER_LIST*) malloc(sizeof(POINTER_LIST));
+        POINTER_LIST *node = (POINTER_LIST*)
+        allocMemory(
+            NULL,
+            sizeof(POINTER_LIST),
+            MEM_COMMIT | MEM_RESERVE,
+            PAGE_READWRITE,    
+            userdata
+        );
+
         if (!node) 
         {
             freeMemory(code, 0, MEM_RELEASE, userdata);
@@ -768,7 +820,11 @@ HMEMORYMODULE MemoryLoadLibraryEx(const void *data, size_t size,
     }
 #endif
 
-    result = (PMEMORYMODULE)HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, sizeof(MEMORYMODULE));
+    result = (PMEMORYMODULE)allocMemory(NULL,
+        sizeof(MEMORYMODULE),
+        MEM_COMMIT | MEM_RESERVE,
+        PAGE_READWRITE,
+        userdata);
     if (result == NULL) 
     {
         freeMemory(code, 0, MEM_RELEASE, userdata);
@@ -781,8 +837,8 @@ HMEMORYMODULE MemoryLoadLibraryEx(const void *data, size_t size,
 
     result->codeBase = code;
     result->isDLL = (old_header->FileHeader.Characteristics & IMAGE_FILE_DLL) != 0;
-    result->alloc = allocMemory;
-    result->free = freeMemory;
+    result->allocMemory = allocMemory;
+    result->freeMemory = freeMemory;
     result->loadLibrary = loadLibrary;
     result->getProcAddress = getProcAddress;
     result->freeLibrary = freeLibrary;
@@ -953,7 +1009,14 @@ FARPROC MemoryGetProcAddress(HMEMORYMODULE mod, LPCSTR name)
             DWORD i;
             DWORD *nameRef = (DWORD *) (codeBase + exports->AddressOfNames);
             WORD *ordinal = (WORD *) (codeBase + exports->AddressOfNameOrdinals);
-            struct ExportNameEntry *entry = (struct ExportNameEntry*) malloc(exports->NumberOfNames * sizeof(struct ExportNameEntry));
+            struct ExportNameEntry *entry = (struct ExportNameEntry *)module->allocMemory(
+                NULL,
+                exports->NumberOfNames * sizeof(struct ExportNameEntry),
+                MEM_COMMIT | MEM_RESERVE,
+                PAGE_READWRITE,
+                module->userdata
+            );
+
             module->nameExportsTable = entry;
             if (!entry) 
             {
@@ -1011,7 +1074,7 @@ void MemoryFreeLibrary(HMEMORYMODULE mod)
         (*DllEntry)((HINSTANCE)module->codeBase, DLL_PROCESS_DETACH, 0);
     }
 
-    free(module->nameExportsTable);
+    module->freeMemory(module->nameExportsTable, 0, MEM_RELEASE, module->userdata);
     if (module->modules != NULL) 
     {
         // free previously opened libraries
@@ -1024,19 +1087,20 @@ void MemoryFreeLibrary(HMEMORYMODULE mod)
             }
         }
 
-        free(module->modules);
+        module->freeMemory(module->modules, 0, MEM_RELEASE, module->userdata);
     }
 
     if (module->codeBase != NULL) 
     {
         // release memory of library
-        module->free(module->codeBase, 0, MEM_RELEASE, module->userdata);
+        module->freeMemory(module->codeBase, 0, MEM_RELEASE, module->userdata);
     }
 
 #ifdef _WIN64
-    FreePointerList(module->blockedMemory, module->free, module->userdata);
+    FreePointerList(module->blockedMemory, module->freeMemory, module->userdata);
 #endif
-    HeapFree(GetProcessHeap(), 0, module);
+
+    module->freeMemory(module, 0, MEM_RELEASE, module->userdata);
 }
 
 
@@ -1052,7 +1116,7 @@ int MemoryCallEntryPoint(HMEMORYMODULE mod)
 }
 
 
-#define DEFAULT_LANGUAGE        MAKELANGID(LANG_NEUTRAL, SUBLANG_NEUTRAL)
+#define DEFAULT_LANGUAGE MAKELANGID(LANG_NEUTRAL, SUBLANG_NEUTRAL)
 
 
 HMEMORYRSRC MemoryFindResource(HMEMORYMODULE module, LPCTSTR name, LPCTSTR type)
@@ -1061,11 +1125,9 @@ HMEMORYRSRC MemoryFindResource(HMEMORYMODULE module, LPCTSTR name, LPCTSTR type)
 }
 
 
-static PIMAGE_RESOURCE_DIRECTORY_ENTRY _MemorySearchResourceEntry(
-    void *root,
-    PIMAGE_RESOURCE_DIRECTORY resources,
-    LPCTSTR key)
+static PIMAGE_RESOURCE_DIRECTORY_ENTRY _MemorySearchResourceEntry(HMEMORYMODULE mod, void *root, PIMAGE_RESOURCE_DIRECTORY resources, LPCTSTR key)
 {
+    PMEMORYMODULE module = (PMEMORYMODULE)mod;
     PIMAGE_RESOURCE_DIRECTORY_ENTRY entries = (PIMAGE_RESOURCE_DIRECTORY_ENTRY) (resources + 1);
     PIMAGE_RESOURCE_DIRECTORY_ENTRY result = NULL;
     DWORD start;
@@ -1086,7 +1148,8 @@ static PIMAGE_RESOURCE_DIRECTORY_ENTRY _MemorySearchResourceEntry(
     // entries are stored as ordered list of named entries,
     // followed by an ordered list of id entries - we can do
     // a binary search to find faster...
-    if (IS_INTRESOURCE(key)) {
+    if (IS_INTRESOURCE(key)) 
+    {
         WORD check = (WORD) (uintptr_t) key;
         start = resources->NumberOfNamedEntries;
         end = start + resources->NumberOfIdEntries;
@@ -1127,8 +1190,12 @@ static PIMAGE_RESOURCE_DIRECTORY_ENTRY _MemorySearchResourceEntry(
         LPWSTR _searchKey;
         if (searchKeyLen > MAX_LOCAL_KEY_LENGTH) 
         {
-            size_t _searchKeySize = (searchKeyLen + 1) * sizeof(wchar_t);
-            _searchKey = (LPWSTR) malloc(_searchKeySize);
+            size_t _searchKeySize = (searchKeyLen + 1) * sizeof(wchar_t);           
+            _searchKey = (LPWSTR) module->allocMemory(NULL,
+                _searchKeySize,
+                MEM_COMMIT,
+                PAGE_READWRITE,
+                module->userdata);
             if (_searchKey == NULL) 
             {
                 SetLastError(ERROR_OUTOFMEMORY);
@@ -1182,7 +1249,7 @@ static PIMAGE_RESOURCE_DIRECTORY_ENTRY _MemorySearchResourceEntry(
 #if !defined(UNICODE)
         if (searchKeyLen > MAX_LOCAL_KEY_LENGTH) 
         {
-            free(_searchKey);
+            module->freeMemory(_searchKey, 0, MEM_RELEASE, module->userdata);
         }
 #undef MAX_LOCAL_KEY_LENGTH
 #endif
@@ -1220,7 +1287,7 @@ HMEMORYRSRC MemoryFindResourceEx(HMEMORYMODULE module, LPCTSTR name, LPCTSTR typ
     // - second node is the name
     // - third node is the language
     rootResources = (PIMAGE_RESOURCE_DIRECTORY) (codeBase + directory->VirtualAddress);
-    foundType = _MemorySearchResourceEntry(rootResources, rootResources, type);
+    foundType = _MemorySearchResourceEntry(module, rootResources, rootResources, type);
     if (foundType == NULL) 
     {
         SetLastError(ERROR_RESOURCE_TYPE_NOT_FOUND);
@@ -1228,7 +1295,7 @@ HMEMORYRSRC MemoryFindResourceEx(HMEMORYMODULE module, LPCTSTR name, LPCTSTR typ
     }
 
     typeResources = (PIMAGE_RESOURCE_DIRECTORY) (codeBase + directory->VirtualAddress + (foundType->OffsetToData & 0x7fffffff));
-    foundName = _MemorySearchResourceEntry(rootResources, typeResources, name);
+    foundName = _MemorySearchResourceEntry(module, rootResources, typeResources, name);
     if (foundName == NULL) 
     {
         SetLastError(ERROR_RESOURCE_NAME_NOT_FOUND);
@@ -1236,7 +1303,7 @@ HMEMORYRSRC MemoryFindResourceEx(HMEMORYMODULE module, LPCTSTR name, LPCTSTR typ
     }
 
     nameResources = (PIMAGE_RESOURCE_DIRECTORY) (codeBase + directory->VirtualAddress + (foundName->OffsetToData & 0x7fffffff));
-    foundLanguage = _MemorySearchResourceEntry(rootResources, nameResources, (LPCTSTR) (uintptr_t) language);
+    foundLanguage = _MemorySearchResourceEntry(module, rootResources, nameResources, (LPCTSTR) (uintptr_t) language);
     if (foundLanguage == NULL) 
     {
         // requested language not found, use first available

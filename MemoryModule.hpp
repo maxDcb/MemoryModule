@@ -38,6 +38,7 @@ HMEMORYMODULE MemoryLoadLibraryEx(const void *, size_t,
     CustomFreeLibraryFunc,
     void *);
 
+    
 /**
  * Get address of exported method. Supports loading both by name and by
  * ordinal value.
