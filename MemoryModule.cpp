@@ -1103,6 +1103,114 @@ void MemoryFreeLibrary(HMEMORYMODULE mod)
     module->freeMemory(module, 0, MEM_RELEASE, module->userdata);
 }
 
+//
+// VEH for handling the exit of an exe
+//
+
+
+#ifdef _M_X64
+  #define IP Rip
+#else
+  #define IP Eip
+#endif
+
+
+// Globals for our patch/VEH
+static PVOID gVehHandle          = NULL;
+static BYTE  gOrigK32Byte        = 0, gOrigNtdllByte = 0;
+static LPBYTE gK32ExitProcess    = NULL;
+static LPBYTE gNtdllExitUserProc = NULL;
+
+
+// Forward decl: your continuation (valid CFG target)
+DWORD WINAPI AfterExeContinuation(LPVOID);
+
+
+// VEH: redirect ExitProcess / RtlExitUserProcess -> AfterExeContinuation
+static LONG CALLBACK VehExitTrap(PEXCEPTION_POINTERS p)
+{
+    if (p->ExceptionRecord->ExceptionCode != EXCEPTION_BREAKPOINT)
+        return EXCEPTION_CONTINUE_SEARCH;
+
+    void* addr = p->ExceptionRecord->ExceptionAddress;
+
+    if (addr == gK32ExitProcess || addr == gNtdllExitUserProc) {
+        // Optional: recover original byte so if execution ever resumes there, it works.
+        // But we won’t resume there; we’ll *redirect* control flow.
+        p->ContextRecord->IP = (DWORD_PTR)AfterExeContinuation; // jump into our code
+
+        return EXCEPTION_CONTINUE_EXECUTION;
+    }
+    return EXCEPTION_CONTINUE_SEARCH;
+}
+
+
+// Write a single INT3 at target -> int3 to trigger the exeption
+static BOOL PutInt3(LPBYTE target, BYTE* saved)
+{
+    DWORD old;
+    if (!VirtualProtect(target, 1, PAGE_EXECUTE_READWRITE, &old)) return FALSE;
+    *saved = *target;
+    *target = 0xCC; // INT3
+    FlushInstructionCache(GetCurrentProcess(), target, 1);
+    VirtualProtect(target, 1, old, &old);
+    return TRUE;
+}
+
+
+// Restore original byte
+static void RestoreByte(LPBYTE target, BYTE saved)
+{
+    DWORD old;
+    if (!target) return;
+    if (!VirtualProtect(target, 1, PAGE_EXECUTE_READWRITE, &old)) return;
+    *target = saved;
+    FlushInstructionCache(GetCurrentProcess(), target, 1);
+    VirtualProtect(target, 1, old, &old);
+}
+
+
+// Install VEH + breakpoints
+static BOOL InstallExitVEH(void)
+{
+    if (gVehHandle) return TRUE;
+
+    HMODULE k32 = GetModuleHandleW(L"kernel32.dll");
+    HMODULE ntd = GetModuleHandleW(L"ntdll.dll");
+    if (!k32 || !ntd) return FALSE;
+
+    gK32ExitProcess    = (LPBYTE)GetProcAddress(k32, "ExitProcess");
+    gNtdllExitUserProc = (LPBYTE)GetProcAddress(ntd, "RtlExitUserProcess");
+    if (!gK32ExitProcess || !gNtdllExitUserProc) return FALSE;
+
+    if (!PutInt3(gK32ExitProcess, &gOrigK32Byte)) return FALSE;
+    if (!PutInt3(gNtdllExitUserProc, &gOrigNtdllByte)) {
+        RestoreByte(gK32ExitProcess, gOrigK32Byte);
+        return FALSE;
+    }
+
+    gVehHandle = AddVectoredExceptionHandler(1, VehExitTrap);
+    return gVehHandle != NULL;
+}
+
+
+// Remove VEH + restore bytes
+static void RemoveExitVEH(void)
+{
+    if (gVehHandle) {
+        RemoveVectoredExceptionHandler(gVehHandle);
+        gVehHandle = NULL;
+    }
+    RestoreByte(gK32ExitProcess,    gOrigK32Byte);
+    RestoreByte(gNtdllExitUserProc, gOrigNtdllByte);
+}
+
+
+DWORD WINAPI AfterExeContinuation(LPVOID)
+{
+    return 0;
+}
+
 
 int MemoryCallEntryPoint(HMEMORYMODULE mod)
 {
@@ -1112,7 +1220,14 @@ int MemoryCallEntryPoint(HMEMORYMODULE mod)
         return -1;
     }
 
-    return module->exeEntry();
+    if (!InstallExitVEH()) return -2;
+
+    module->exeEntry();
+
+    // Reach thanks to the AfterExeContinuation
+    RemoveExitVEH();
+
+    return 0;
 }
 
 
