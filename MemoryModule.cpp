@@ -687,6 +687,7 @@ HMEMORYMODULE MemoryLoadLibraryEx(const void *data, size_t size,
     size_t optionalSectionSize;
     size_t lastSectionEnd = 0;
     size_t alignedImageSize;
+    DWORD functionCount;
 #ifdef _WIN64
     POINTER_LIST *blockedMemory = NULL;
 #endif
@@ -909,7 +910,7 @@ HMEMORYMODULE MemoryLoadLibraryEx(const void *data, size_t size,
 
     // __debugbreak();
 
-    DWORD functionCount = result->pdataSize / sizeof(RUNTIME_FUNCTION);
+    functionCount= result->pdataSize / sizeof(RUNTIME_FUNCTION);
     RtlAddFunctionTable(result->pdataStart, functionCount, (DWORD64)result->codeBase);
 
     // get entry point of loaded library
