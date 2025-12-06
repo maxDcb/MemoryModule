@@ -94,9 +94,11 @@ typedef struct
     void *userdata;
     ExeEntryProc exeEntry;
     DWORD pageSize;
-    
+
+#ifdef _WIN64
     PRUNTIME_FUNCTION pdataStart;
     DWORD pdataSize;
+#endif
 
 #ifdef _WIN64
     POINTER_LIST *blockedMemory;
@@ -280,13 +282,14 @@ static BOOL CopySections(const unsigned char *data, size_t size, PIMAGE_NT_HEADE
 
         if (memcmp(section->Name, ".pdata", 6) == 0) 
         {
-
+#ifdef _WIN64
             module->pdataStart = (PRUNTIME_FUNCTION)(codeBase + section->VirtualAddress);
             module->pdataSize = section->SizeOfRawData;
 
 #ifdef DEBUG_OUTPUT
             printf("section->Name %s\n", section->Name);
             printf("module->pdataStart %p\n", dest);
+#endif
 #endif
         }
 
@@ -909,9 +912,10 @@ HMEMORYMODULE MemoryLoadLibraryEx(const void *data, size_t size,
     //
 
     // __debugbreak();
-
+#ifdef _WIN64
     functionCount= result->pdataSize / sizeof(RUNTIME_FUNCTION);
     RtlAddFunctionTable(result->pdataStart, functionCount, (DWORD64)result->codeBase);
+#endif
 
     // get entry point of loaded library
     if (result->headers->OptionalHeader.AddressOfEntryPoint != 0) 
