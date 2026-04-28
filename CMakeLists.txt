@@ -9,5 +9,7 @@ add_library (MemoryModule STATIC MemoryModule.cpp MemoryModule.hpp)
 set_property(TARGET MemoryModule PROPERTY  MSVC_RUNTIME_LIBRARY "MultiThreaded")
 target_include_directories(MemoryModule PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}")
 
-#add_subdirectory(tests)
+if(C2CORE_BUILD_TESTS)
+  add_subdirectory(tests)
+endif()
 

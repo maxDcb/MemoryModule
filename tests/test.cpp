@@ -5,7 +5,7 @@
 
 #include "../MemoryModule.hpp"  
 
-typedef void (*HelloFunc)();
+typedef BOOL (*HelloFunc)();
 
 int main() 
 {
@@ -30,10 +30,19 @@ int main()
         }
 
         HelloFunc hello = (HelloFunc)MemoryGetProcAddress(mod, "HelloFromDll");
-        if (hello)
-            hello();
-        else
+        if (!hello)
+        {
             std::cerr << "Could not find HelloFromDll\n";
+            MemoryFreeLibrary(mod);
+            return 1;
+        }
+
+        if (!hello())
+        {
+            std::cerr << "HelloFromDll returned failure\n";
+            MemoryFreeLibrary(mod);
+            return 1;
+        }
 
         MemoryFreeLibrary(mod);
     }
@@ -58,7 +67,22 @@ int main()
             return 1;
         }        
 
-        MemoryCallEntryPoint(mod);
+        SetEnvironmentVariableA("MEMORYMODULE_TEST_EXE_RAN", NULL);
+        if (MemoryCallEntryPoint(mod) != 0)
+        {
+            std::cerr << "MemoryCallEntryPoint failed\n";
+            MemoryFreeLibrary(mod);
+            return 1;
+        }
+
+        char envValue[8] = {};
+        DWORD envLen = GetEnvironmentVariableA("MEMORYMODULE_TEST_EXE_RAN", envValue, sizeof(envValue));
+        if (envLen == 0 || strcmp(envValue, "true") != 0)
+        {
+            std::cerr << "TestExe did not mark execution success\n";
+            MemoryFreeLibrary(mod);
+            return 1;
+        }
 
         MemoryFreeLibrary(mod);
     }

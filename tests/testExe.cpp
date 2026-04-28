@@ -6,11 +6,11 @@
 
 int APIENTRY WinMain( HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmdLine, int nCmdShow )
 {
-	// Check if there is a command-line argument
-    if (lpCmdLine != NULL && lpCmdLine[0] != '\0') {
-        MessageBox(NULL, lpCmdLine, "Argument Received", MB_OK);
-    } else {
-        MessageBox(NULL, "Hello from exe!", "Hi!", MB_OK);
-    }
+    UNREFERENCED_PARAMETER(hInst);
+    UNREFERENCED_PARAMETER(hPrev);
+    UNREFERENCED_PARAMETER(lpCmdLine);
+    UNREFERENCED_PARAMETER(nCmdShow);
+
+    SetEnvironmentVariableA("MEMORYMODULE_TEST_EXE_RAN", "true");
 	return 0;
 }
