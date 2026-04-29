@@ -2,13 +2,10 @@
 #include <iostream>
 
 extern "C" __declspec(dllexport)
-void HelloFromDll()
+BOOL HelloFromDll()
 {
     std::cout << "Hello from inside the DLL!" << std::endl;
-
-    MessageBox( NULL, "Hello from go", "Hi!", MB_OK );
-
-    return;
+    return TRUE;
 }
 
 BOOL WINAPI DllMain(HINSTANCE hinst, DWORD reason, LPVOID)

@@ -48,10 +48,14 @@
 #define IMAGE_SIZEOF_BASE_RELOCATION (sizeof(IMAGE_BASE_RELOCATION))
 #endif
 
-#ifdef _WIN64
+#if defined(_M_ARM64)
+#define HOST_MACHINE IMAGE_FILE_MACHINE_ARM64
+#elif defined(_M_X64)
 #define HOST_MACHINE IMAGE_FILE_MACHINE_AMD64
-#else
+#elif defined(_M_IX86)
 #define HOST_MACHINE IMAGE_FILE_MACHINE_I386
+#else
+#error Unsupported architecture
 #endif
 
 #include "MemoryModule.hpp"
@@ -1140,12 +1144,20 @@ static LONG CALLBACK VehExitTrap(PEXCEPTION_POINTERS p)
     void* addr = p->ExceptionRecord->ExceptionAddress;
 
     if (addr == gK32ExitProcess || addr == gNtdllExitUserProc) {
-        // Optional: recover original byte so if execution ever resumes there, it works.
-        // But we won’t resume there; we’ll *redirect* control flow.
-        p->ContextRecord->IP = (DWORD_PTR)AfterExeContinuation; // jump into our code
+
+#if defined(_M_ARM64)
+        p->ContextRecord->Pc = (DWORD64)AfterExeContinuation;
+#elif defined(_M_X64)
+        p->ContextRecord->Rip = (DWORD64)AfterExeContinuation;
+#elif defined(_M_IX86)
+        p->ContextRecord->Eip = (DWORD)AfterExeContinuation;
+#else
+    #error Unsupported architecture
+#endif
 
         return EXCEPTION_CONTINUE_EXECUTION;
     }
+
     return EXCEPTION_CONTINUE_SEARCH;
 }
 
@@ -1225,12 +1237,12 @@ int MemoryCallEntryPoint(HMEMORYMODULE mod)
         return -1;
     }
 
-    if (!InstallExitVEH()) return -2;
+    // if (!InstallExitVEH()) return -2;
 
     module->exeEntry();
 
     // Reach thanks to the AfterExeContinuation
-    RemoveExitVEH();
+    // RemoveExitVEH();
 
     return 0;
 }
